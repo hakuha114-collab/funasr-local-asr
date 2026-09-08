@@ -1,0 +1,597 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>FunASR 语音转写工作台</title>
+<!-- 内联 SVG 图标：浏览器用它而不再请求 /favicon.ico，消除 404；标签页显示麦克风 -->
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🎤</text></svg>" />
+<!-- 麦克风采集用内置 Web Audio API 实现（见 MicCapture），不再依赖外部 recorder-core.js -->
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+         background: #f5f6f8; color: #222; }
+  header { background: #1f2937; color: #fff; padding: 14px 20px; }
+  header h1 { margin: 0; font-size: 18px; }
+  header small { color: #9ca3af; }
+  .wrap { max-width: 1100px; margin: 16px auto; padding: 0 16px; display: flex; gap: 16px; flex-wrap: wrap; }
+  .card { background: #fff; border: 1px solid #e5e7eb; border-radius: 10px; padding: 16px; flex: 1 1 360px; min-width: 320px; }
+  .card h2 { margin: 0 0 12px; font-size: 15px; border-left: 4px solid #2563eb; padding-left: 8px; }
+  label { font-size: 13px; color: #374151; }
+  input[type=text], textarea, select { width: 100%; padding: 8px; border: 1px solid #d1d5db; border-radius: 6px;
+         font-size: 13px; font-family: inherit; }
+  textarea { resize: vertical; }
+  .row { margin-bottom: 12px; }
+  .inline { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .tabs { display: flex; gap: 8px; margin-bottom: 12px; }
+  .tab { padding: 8px 14px; border-radius: 6px; background: #eef2ff; cursor: pointer; font-size: 13px; border: 1px solid transparent; }
+  .tab.active { background: #2563eb; color: #fff; }
+  button { cursor: pointer; border: none; border-radius: 6px; padding: 9px 16px; font-size: 13px; }
+  .btn-primary { background: #2563eb; color: #fff; }
+  .btn-ok { background: #059669; color: #fff; }
+  .btn-warn { background: #d97706; color: #fff; }
+  .btn-ghost { background: #e5e7eb; color: #111; }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  .status { font-size: 13px; padding: 6px 10px; border-radius: 6px; display: inline-block; }
+  .status.off { background: #fee2e2; color: #b91c1c; }
+  .status.on  { background: #dcfce7; color: #15803d; }
+  #result { width: 100%; height: 280px; background: #f9fafb; font-size: 14px; line-height: 1.6; }
+  .filelist { max-height: 320px; overflow: auto; border: 1px solid #e5e7eb; border-radius: 6px; }
+  .fileitem { padding: 8px 10px; border-bottom: 1px solid #f1f1f1; font-size: 13px; display: flex; justify-content: space-between; gap: 8px; }
+  .fileitem:last-child { border-bottom: none; }
+  .fname { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .fstat { color: #6b7280; font-size: 12px; white-space: nowrap; }
+  .ftext { color: #059669; font-size: 12px; margin-left: 6px; cursor: pointer; text-decoration: underline; }
+  .hint { font-size: 12px; color: #6b7280; margin-top: 4px; }
+  .badge { font-size: 11px; background: #fef3c7; color: #92400e; padding: 2px 6px; border-radius: 4px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>FunASR 语音转写工作台</h1>
+  <small>麦克风实时转写 · 文件夹批量转写 · 结果可下载</small>
+</header>
+
+<div class="wrap">
+  <!-- 左：连接与设置 -->
+  <div class="card">
+    <h2>① 连接 ASR 服务</h2>
+    <div class="row">
+      <label>WebSocket 地址（无 SSL 用 ws://）</label>
+      <input id="wsUrl" type="text" value="ws://localhost:10095/" />
+      <div class="hint">默认连<b>本地 conda 环境</b>起的 FunASR 服务（funasr_local_server，端口 10095，无需 Docker）。若仍用 Docker，请把地址改成 ws://localhost:10096/。</div>
+    </div>
+    <div class="row">
+      <label>说话人分离(diarization)服务地址（文件夹批量走这里）</label>
+      <input id="diarizeUrl" type="text" value="http://localhost:10098" />
+      <div class="hint">批量识别/多人分离由本地 <b>diarize 服务（端口 10098）</b>处理，使用 cam++ 真实声纹聚类，并支持 wav/mp3/m4a/flac/ogg 等全部格式；麦克风实时仍走上面的 WS 服务。</div>
+    </div>
+    <div class="row inline">
+      <button id="btnConnect" class="btn-primary">连接</button>
+      <button id="btnDisconnect" class="btn-ghost" disabled>断开</button>
+      <span id="connState" class="status off">未连接</span>
+    </div>
+
+    <h2 style="margin-top:18px;">② 识别设置</h2>
+    <div class="row inline">
+      <label><input type="checkbox" id="itn" /> 数字转中文(ITN)</label>
+      <span class="badge">默认关=阿拉伯数字</span>
+    </div>
+    <div class="row inline">
+      <label><input type="checkbox" id="spk" /> 说话人分离(cam++)</label>
+      <label style="margin-left:8px;">人数
+        <input id="spkNum" type="number" min="0" value="0" style="width:60px;padding:4px;" />
+      </label>
+      <span class="hint">0=自动</span>
+    </div>
+    <div class="row">
+      <label>热词（一行一个，空格隔开权重，如：科大讯飞 20）</label>
+      <textarea id="hotwords" rows="3" placeholder="科大讯飞 20&#10;特斯拉 15"></textarea>
+    </div>
+    <div class="row">
+      <label>麦克风模型模式</label>
+      <select id="micMode">
+        <option value="2pass" selected>2pass（实时+离线精修）</option>
+        <option value="online">online（纯实时）</option>
+        <option value="offline">offline（纯离线）</option>
+      </select>
+    </div>
+  </div>
+
+  <!-- 右：模式与结果 -->
+  <div class="card">
+    <div class="tabs">
+      <div class="tab active" data-mode="mic" id="tabMic">🎤 麦克风实时</div>
+      <div class="tab" data-mode="folder" id="tabFolder">📁 文件夹批量</div>
+    </div>
+
+    <!-- 麦克风面板 -->
+    <div id="panelMic">
+      <div class="row inline">
+        <button id="btnStart" class="btn-ok" disabled>开始录音</button>
+        <button id="btnStop" class="btn-warn" disabled>停止</button>
+        <button id="btnClear" class="btn-ghost">清空</button>
+        <button id="btnDownloadMic" class="btn-primary">下载结果</button>
+      </div>
+      <div class="hint" id="micInfo">连接后点击「开始录音」</div>
+      <textarea id="result" readonly placeholder="实时识别结果将显示在这里…"></textarea>
+    </div>
+
+    <!-- 文件夹面板 -->
+    <div id="panelFolder" style="display:none;">
+      <div class="row inline">
+        <button id="btnPickFolder" class="btn-primary">选择文件夹</button>
+        <button id="btnPickFiles" class="btn-primary">选择文件（可多选）</button>
+        <button id="btnRunFolder" class="btn-ok" disabled>开始批量识别</button>
+        <button id="btnDownloadAll" class="btn-primary" disabled>下载全部结果</button>
+        <input id="folderInput" type="file" webkitdirectory directory multiple style="display:none;" />
+        <input id="filesInput" type="file" multiple style="display:none;" />
+      </div>
+      <div class="hint">两种选择都行：①「选择文件夹」会导入该目录下全部文件；②「选择文件」可手动多选指定文件。列表会显示所有已选文件，逐个串行识别。<b>识别走本地 diarization 服务（端口 10098），支持 wav/mp3/m4a/flac/ogg 等全部格式，并自动按声纹区分说话人。</b></div>
+      <div class="filelist" id="fileList"><div class="fstat" style="padding:10px;">尚未选择文件夹</div></div>
+      <div class="row" style="margin-top:12px;">
+        <label>合并结果预览</label>
+        <textarea id="folderResult" readonly rows="8" placeholder="批量识别完成后，此处显示「文件名 + 文本」合并内容…"></textarea>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+"use strict";
+/* ============ 全局状态 ============ */
+let ws = null;                 // 麦克风用的长连接
+let isRecording = false;
+let sessionMode = "mic";       // mic | folder
+let finalText = "";            // 已确定的麦克风文本
+let liveText = "";             // 实时（未确定）文本
+let rec = null;                // MicCapture 麦克风对象
+let sampleBuf = new Int16Array();
+let totalSamples = 0;         // 麦克风已发送采样数（用于显示时长）
+let stopped = false;          // 麦克风已点击停止后置位：停止后不再显示实时增量
+let stopSafetyTimer = null;   // 停止后兜底强制关闭连接的定时器
+
+/* ============ 麦克风采集：内置 Web Audio API ============ */
+// 自实现，不依赖外部 recorder-core.js：用 getUserMedia + ScriptProcessor 采集。
+// 关键修复：不再强制 AudioContext 采样率为 16k。部分声卡/浏览器在 16k 下会静默回落到原生率、
+// 导致麦克风音频图重采样失败、onaudioprocess 返回全零（ASR 收到静音 → 空 text）。
+// 改为用【原生采样率】采集，再在前端线性插值重采样到 16k，保证喂给 ASR 的一定是合法 16k 音频。
+function MicCapture(opts) {
+  let audioCtx = null, stream = null, source = null, processor = null;
+  const AC = window.AudioContext || window.webkitAudioContext;
+  const TARGET_RATE = 16000;
+
+  // 线性插值重采样：原生采样率 → 16k（升/降采样通用；相同采样率时为恒等变换）
+  function resample(input, fromRate, toRate) {
+    if (fromRate === toRate) return input;
+    const ratio = fromRate / toRate;
+    const outLen = Math.max(1, Math.round(input.length / ratio));
+    const out = new Float32Array(outLen);
+    for (let i = 0; i < outLen; i++) {
+      const pos = i * ratio;
+      const i0 = Math.floor(pos);
+      const i1 = Math.min(i0 + 1, input.length - 1);
+      const frac = pos - i0;
+      out[i] = input[i0] * (1 - frac) + input[i1] * frac;
+    }
+    return out;
+  }
+
+  function floatToPCM16(float32) {
+    const pcm = new Int16Array(float32.length);
+    for (let i = 0; i < float32.length; i++) {
+      let v = Math.max(-1, Math.min(1, float32[i]));
+      pcm[i] = v < 0 ? v * 0x8000 : v * 0x7fff;
+    }
+    return pcm;
+  }
+
+  return {
+    open(cb) {
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        alert("当前浏览器不支持麦克风采集（需 https 或 localhost）。");
+        if (cb) cb(new Error("getUserMedia unsupported"));
+        return;
+      }
+      navigator.mediaDevices.getUserMedia({
+        audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: false }
+      }).then(s => {
+        stream = s;
+        audioCtx = new AC(); // 使用原生采样率，避免 16k 被静默回落导致静音
+        const fromRate = audioCtx.sampleRate;
+        source = audioCtx.createMediaStreamSource(stream);
+        processor = audioCtx.createScriptProcessor(4096, 1, 1);
+        processor.onaudioprocess = (e) => {
+          const input = e.inputBuffer.getChannelData(0);           // 原生采样率 Float32 -1..1
+          const resampled = resample(input, fromRate, TARGET_RATE); // → 16k Float32
+          const pcm = floatToPCM16(resampled);                     // → 16k PCM16
+          if (opts.onProcess) opts.onProcess(pcm);
+        };
+        source.connect(processor);
+        processor.connect(audioCtx.destination); // 静音输出，仅为触发 onaudioprocess
+        console.log("[MicCapture] audioCtx.sampleRate =", fromRate, "→ 已重采样到 16k");
+        if (cb) cb();
+      }).catch(err => {
+        alert("无法访问麦克风：" + err);
+        if (cb) cb(err);
+      });
+    },
+    start() { if (audioCtx && audioCtx.state === "suspended") audioCtx.resume(); },
+    stop() {
+      try { processor && processor.disconnect(); } catch (_) {}
+      try { source && source.disconnect(); } catch (_) {}
+      try { stream && stream.getTracks().forEach(t => t.stop()); } catch (_) {}
+      try { audioCtx && audioCtx.close(); } catch (_) {}
+    }
+  };
+}
+
+let folderFiles = [];          // 选中的文件列表
+let fileResults = [];          // {name,text,live,status}
+
+/* ============ DOM ============ */
+const $ = (id) => document.getElementById(id);
+const wsUrl = $("wsUrl");
+const diarizeUrl = $("diarizeUrl");
+// 单个文件的识别请求最长等待时间；超过则判定为服务端卡死并标记失败，
+// 避免页面无限停留在「处理中…」（此前服务端阻塞事件循环会导致 fetch 永不返回）。
+const FETCH_TIMEOUT_MS = 15 * 60 * 1000;
+const connState = $("connState");
+const resultBox = $("result");
+const folderResultBox = $("folderResult");
+
+/* ============ 工具函数 ============ */
+function buildHotwords() {
+  const raw = $("hotwords").value.trim();
+  if (!raw) return null;
+  const items = raw.split(/[\r\n]+/);
+  const json = {};
+  const reNum = /^[0-9]*$/;
+  for (const line of items) {
+    const parts = line.trim().split(/\s+/);
+    if (parts.length >= 2 && reNum.test(parts[parts.length - 1])) {
+      const w = parts.slice(0, -1).join(" ");
+      json[w] = parseInt(parts[parts.length - 1], 10);
+    } else if (parts.length >= 1 && parts[0]) {
+      json[parts.join(" ")] = 20; // 无权重默认 20
+    }
+  }
+  return Object.keys(json).length ? JSON.stringify(json) : null;
+}
+
+// 构造发送给 ASR 服务的起始 JSON
+// opts: { wav:true, audio_fs, wav_format }（批量模式下 wav 需要这些字段）
+function buildStartRequest(mode, name, opts) {
+  const req = {
+    chunk_size: [5, 10, 5],
+    wav_name: name || "microphone",
+    is_speaking: true,
+    chunk_interval: 10,
+    itn: $("itn").checked,               // 默认未勾选 = false = 阿拉伯数字
+    mode: mode,
+    speaker_diarization: $("spk").checked ? 1 : 0,
+    speaker_num: parseInt($("spkNum").value, 10) || 0,
+  };
+  const hw = buildHotwords();
+  if (hw) req.hotwords = hw;
+
+  if (opts && opts.wav) {
+    req.wav_format = "PCM";
+    req.audio_fs = opts.audio_fs || 16000;
+  } else if (opts && opts.wav_format) {
+    req.wav_format = opts.wav_format; // 服务端用 ffmpeg 解码
+  }
+  return req;
+}
+
+function readWavInfo(bytes) {
+  if (!bytes || bytes.byteLength < 44) return null;
+  const eq = (p, s) => { for (let i=0;i<s.length;i++) if (bytes[p+i]!==s.charCodeAt(i)) return false; return true; };
+  if (eq(0,"RIFF") && eq(8,"WAVEfmt ")) {
+    const numCh = bytes[22];
+    if (bytes[20]===1 && (numCh===1||numCh===2)) {
+      const sampleRate = bytes[24] | (bytes[25]<<8) | (bytes[26]<<16) | (bytes[27]<<24);
+      let dataPos = 0;
+      for (let i=12, iL=bytes.length-8; i<iL;) {
+        if (bytes[i]===100&&bytes[i+1]===97&&bytes[i+2]===116&&bytes[i+3]===97) { dataPos=i+8; break; }
+        const i0=i; i+=4; i+=4+bytes[i]+(bytes[i+1]<<8)+(bytes[i+2]<<16)+(bytes[i+3]<<24);
+        if (i0===12) {}
+      }
+      if (dataPos) return { sampleRate, dataPos };
+    }
+  }
+  return null;
+}
+
+function spkPrefix(msg) {
+  // 服务端实时模式返回字段是 spk_name（离线 diarize 服务返回的是 spk）。
+  // 两者都兜底；"unknown" 视为无有效说话人信息，不显示前缀。
+  let spk = (msg.spk !== undefined && msg.spk !== null) ? msg.spk
+          : (msg.spk_name !== undefined && msg.spk_name !== null ? msg.spk_name : null);
+  spk = (spk === null || spk === "" || spk === "unknown") ? null : spk;
+  return spk !== null ? "[" + spk + "] " : "";
+}
+
+function downloadText(filename, text) {
+  const blob = new Blob([text], { type: "text/plain;charset=utf-8" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+
+/* ============ 连接 ============ */
+$("btnConnect").onclick = () => {
+  if (!wsUrl.value.match(/^wss?:\/\//)) { alert("地址需以 ws:// 或 wss:// 开头"); return; }
+  try {
+    ws = new WebSocket(wsUrl.value, "binary");
+  } catch (e) { alert("创建连接失败：" + e); return; }
+
+  ws.onopen = () => {
+    connState.className = "status on";
+    connState.textContent = "已连接";
+    $("btnConnect").disabled = true;
+    $("btnDisconnect").disabled = false;
+    if (sessionMode === "mic") { $("btnStart").disabled = false; }
+  };
+  ws.onmessage = (e) => onMicMessage(e);
+  ws.onclose = () => {
+    if (stopSafetyTimer) { clearTimeout(stopSafetyTimer); stopSafetyTimer = null; }
+    connState.className = "status off";
+    connState.textContent = "已断开";
+    $("btnConnect").disabled = false;
+    $("btnDisconnect").disabled = true;
+    $("btnStart").disabled = true;
+    $("btnStop").disabled = true;
+  };
+  ws.onerror = () => { alert("连接出错，请确认 ASR 服务已启动且地址端口正确。"); };
+};
+
+$("btnDisconnect").onclick = () => { if (ws) ws.close(); };
+
+/* ============ 麦克风实时 ============ */
+function onMicMessage(e) {
+  let msg;
+  try { msg = JSON.parse(e.data); } catch (_) { return; }
+  const text = msg.text || "";
+  const prefix = spkPrefix(msg);
+  if (msg.is_final) {
+    finalText += (finalText ? "\n" : "") + prefix + text;
+    liveText = "";
+    if (stopSafetyTimer) { clearTimeout(stopSafetyTimer); stopSafetyTimer = null; }
+  } else {
+    // 停止后不再把增量写进“实时”显示，避免“仍在分析”的观感
+    if (!stopped) liveText = prefix + text;
+  }
+  renderMic();
+  // 收到服务端最终 ack 后自动断开（麦克风模式）
+  if (msg.is_final && msg.is_end) {
+    $("micInfo").textContent = "识别完成";
+    setTimeout(() => { if (ws) ws.close(); }, 500);
+  }
+}
+
+function renderMic() {
+  resultBox.value = finalText + (liveText ? ("\n[实时] " + liveText) : "");
+  resultBox.scrollTop = resultBox.scrollHeight;
+}
+
+$("btnStart").onclick = () => {
+  if (!rec) {
+    rec = MicCapture({ sampleRate: 16000, onProcess: recProcess });
+  }
+  stopped = false;
+  if (stopSafetyTimer) { clearTimeout(stopSafetyTimer); stopSafetyTimer = null; }
+  rec.open(() => {
+    rec.start();
+    isRecording = true;
+    totalSamples = 0;
+    sampleBuf = new Int16Array();
+    $("btnStart").disabled = true;
+    $("btnStop").disabled = false;
+    $("micInfo").textContent = "录音中…";
+    // 发送起始 JSON
+    const req = buildStartRequest($("micMode").value, "microphone", null);
+    req.audio_fs = 16000; // 前端 MicCapture 已重采样到 16k
+    ws.send(JSON.stringify(req));
+  });
+};
+
+$("btnStop").onclick = () => {
+  isRecording = false;
+  stopped = true;
+  // 发送剩余缓冲 + 结束标记
+  if (sampleBuf.length > 0) { try { ws.send(sampleBuf); } catch (_) {} sampleBuf = new Int16Array(); }
+  try { ws.send(JSON.stringify({ is_speaking: false, is_end: true })); } catch (_) {}
+  if (rec) rec.stop();
+  $("btnStart").disabled = false;
+  $("btnStop").disabled = true;
+  $("micInfo").textContent = "已停止，等待最终结果…";
+  // 安全兜底：若服务端迟迟不回最终 ack，最多 10s 后强制关闭连接，避免一直“分析中”
+  stopSafetyTimer = setTimeout(() => {
+    if (ws && ws.readyState === 1) {
+      try { ws.close(); } catch (_) {}
+      $("micInfo").textContent = "已停止（连接超时已关闭）";
+    }
+    stopSafetyTimer = null;
+  }, 10000);
+};
+
+$("btnClear").onclick = () => { finalText = ""; liveText = ""; renderMic(); };
+$("btnDownloadMic").onclick = () => {
+  if (!finalText.trim()) { alert("暂无结果可下载"); return; }
+  downloadText("asr_mic_" + dateTag() + ".txt", finalText);
+};
+
+function recProcess(pcmChunk) {
+  if (!isRecording) return;
+  // pcmChunk: Int16Array，已是 16k 单声道 PCM16
+  sampleBuf = Int16Array.from([...sampleBuf, ...pcmChunk]);
+  const CHUNK = 960; // 对应 chunk_size [5,10,5]
+  while (sampleBuf.length >= CHUNK) {
+    const sendBuf = sampleBuf.slice(0, CHUNK);
+    sampleBuf = sampleBuf.slice(CHUNK);
+    if (ws && ws.readyState === 1) ws.send(sendBuf);
+    totalSamples += CHUNK;
+  }
+  $("micInfo").textContent = (totalSamples / 16000).toFixed(1) + "s";
+}
+
+/* ============ 文件夹批量 ============ */
+$("tabMic").onclick = switchTab.bind(null, "mic");
+$("tabFolder").onclick = switchTab.bind(null, "folder");
+function switchTab(mode) {
+  sessionMode = mode;
+  $("tabMic").classList.toggle("active", mode === "mic");
+  $("tabFolder").classList.toggle("active", mode === "folder");
+  $("panelMic").style.display = mode === "mic" ? "" : "none";
+  $("panelFolder").style.display = mode === "folder" ? "" : "none";
+  if (mode === "mic") { $("btnStart").disabled = !(ws && ws.readyState === 1); }
+}
+
+$("btnPickFolder").onclick = () => $("folderInput").click();
+$("btnPickFiles").onclick = () => $("filesInput").click();
+function addFiles(fileList) {
+  const incoming = Array.from(fileList);
+  const seen = new Set(folderFiles.map(f => f.name + "::" + f.size));
+  for (const f of incoming) {
+    const key = f.name + "::" + f.size;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    folderFiles.push(f);
+    fileResults.push({ name: f.name, text: "", live: "", status: "待处理" });
+  }
+  renderFileList();
+  $("btnRunFolder").disabled = folderFiles.length === 0;
+  $("btnDownloadAll").disabled = true;
+}
+$("folderInput").onchange = (e) => { addFiles(e.target.files); e.target.value = ""; };
+$("filesInput").onchange = (e) => { addFiles(e.target.files); e.target.value = ""; };
+
+function renderFileList() {
+  const box = $("fileList");
+  if (!fileResults.length) { box.innerHTML = '<div class="fstat" style="padding:10px;">尚未选择文件夹</div>'; return; }
+  box.innerHTML = "";
+  fileResults.forEach((r, i) => {
+    const div = document.createElement("div");
+    div.className = "fileitem";
+    const show = (r.text || r.live || r.status);
+    div.innerHTML =
+      '<div class="fname">' + (i + 1) + ". " + r.name + "</div>" +
+      '<div class="fstat">' + (r.status || "") + "</div>" +
+      (r.text ? '<span class="ftext" data-i="' + i + '">下载</span>' : "");
+    box.appendChild(div);
+  });
+  box.querySelectorAll(".ftext").forEach(el => {
+    el.onclick = () => {
+      const r = fileResults[+el.dataset.i];
+      downloadText(r.name.replace(/\.[^.]+$/, "") + "_" + dateTag() + ".txt", r.text);
+    };
+  });
+}
+
+$("btnRunFolder").onclick = async () => {
+  if (!diarizeUrl.value.match(/^https?:\/\//)) { alert("请先填写正确的 diarization 服务地址（默认 http://localhost:10098）"); return; }
+  $("btnRunFolder").disabled = true;
+  $("btnPickFolder").disabled = true;
+  for (let i = 0; i < folderFiles.length; i++) {
+    fileResults[i].status = "处理中…";
+    renderFileList();
+    await processOneFile(folderFiles[i], i);
+    // 保留 processOneFile 内部已设置的「失败」状态；仅当仍为「处理中…」时补标完成
+    if (fileResults[i].status === "处理中…") fileResults[i].status = "完成";
+    renderFileList();
+  }
+  // 合并预览
+  let merged = "";
+  fileResults.forEach(r => { merged += "===== " + r.name + " =====\n" + (r.text || "") + "\n\n"; });
+  folderResultBox.value = merged;
+  $("btnDownloadAll").disabled = false;
+  $("btnRunFolder").disabled = false;
+  $("btnPickFolder").disabled = false;
+  alert("批量识别完成，可点击「下载全部结果」或逐条下载。");
+};
+
+function processOneFile(file, idx) {
+  return new Promise((resolve) => {
+    const fd = new FormData();
+    fd.append("file", file);
+    fd.append("itn", $("itn").checked ? "1" : "0");
+    const hw = buildHotwords();
+    if (hw) fd.append("hotword", hw);
+    // 说话人分离：始终走真实 cam++ 聚类。勾选时可指定人数(spkNum, 0=自动)；
+    // 不勾选也传 0(自动聚类多说话人)，避免过去传 1 退化成单说话人导致"没有分人"。
+    fd.append("max_speakers", $("spk").checked ? (parseInt($("spkNum").value, 10) || 0) : 0);
+
+    fileResults[idx].status = "处理中…";
+    renderFileList();
+
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), FETCH_TIMEOUT_MS);
+
+    fetch(diarizeUrl.value.replace(/\/+$/, "") + "/diarize",
+          { method: "POST", body: fd, signal: ctrl.signal })
+      .then(async (r) => {
+        if (!r.ok) {
+          let detail = "";
+          try { detail = (await r.json()).detail || ""; } catch (_) {}
+          throw new Error("HTTP " + r.status + " " + detail);
+        }
+        return r.json();
+      })
+      .then((data) => {
+        const lines = (data.sentences || []).map((s) => {
+          const head = (s.start != null && s.end != null)
+            ? ("[" + Number(s.start).toFixed(1) + "s-" + Number(s.end).toFixed(1) + "s] ") : "";
+          const spkHead = (s.spk != null && s.spk !== "") ? ("speaker " + s.spk + ": ") : "";
+          return head + spkHead + (s.text || "");
+        });
+        fileResults[idx].text = lines.join("\n");
+        fileResults[idx].status = "完成";
+        renderFileList();
+      })
+      .catch((err) => {
+        if (err && err.name === "AbortError") {
+          fileResults[idx].status = "失败: 请求超时(>15分钟无响应)";
+        } else {
+          fileResults[idx].status = "失败: " + String(err && err.message ? err.message : err).slice(0, 100);
+        }
+        renderFileList();
+      })
+      .finally(() => { clearTimeout(timer); resolve(); });
+  });
+}
+
+function sendChunks(s, buf, file) {
+  const ext = (file.name.split(".").pop() || "").toLowerCase();
+  let data = buf;
+  if (ext === "wav") {
+    const info = readWavInfo(buf);          // 跳过 wav 头，只发 PCM 数据
+    if (info && info.dataPos) data = buf.subarray(info.dataPos);
+  }
+  const stride = ext === "wav" ? 1920 : 16384; // wav=PCM16 960样本/帧
+  for (let off = 0; off < data.length; off += stride) {
+    if (s.readyState !== 1) break;
+    s.send(data.subarray(off, Math.min(off + stride, data.length)));
+  }
+}
+
+$("btnDownloadAll").onclick = () => {
+  if (!fileResults.length) return;
+  let merged = "";
+  fileResults.forEach(r => { merged += "===== " + r.name + " =====\n" + (r.text || "") + "\n\n"; });
+  downloadText("asr_batch_" + dateTag() + ".txt", merged.trim());
+};
+
+/* ============ 杂项 ============ */
+function dateTag() {
+  const d = new Date();
+  const p = (n) => String(n).padStart(2, "0");
+  return d.getFullYear() + p(d.getMonth() + 1) + p(d.getDate());
+}
+</script>
+</body>
+</html>

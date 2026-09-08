@@ -1,0 +1,3 @@
+# 锁定版本，避免新版 websockets(>=13) 移除/变更旧 API 导致客户端报错
+# subprotocols 在旧代码中用字符串 "binary"，websockets>=12 需 websockets.Subprotocol("binary")
+websockets==12.0

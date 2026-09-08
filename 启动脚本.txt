@@ -1,0 +1,36 @@
+# FunASR Runtime SDK 在线 2pass 服务启动脚本（2026-08-26 更新）
+# 更新点:
+#   1. 镜像 0.1.12 -> 0.1.13（官方最新在线 CPU 镜像，含若干 bug 修复）
+#   2. 新增说话人分离: --spk-dir 加载 cam++ 模型（容器首次启动会自动下载到 ./models）
+#   3. hotword 文件缺失会导致启动报错，已在容器内创建空文件
+#   4. 端口说明: 容器内 10095，宿主机映射 10096；客户端连宿主机请用 10096
+
+# 1) 拉取最新镜像
+docker pull registry.cn-hangzhou.aliyuncs.com/funasr_repo/funasr:funasr-runtime-sdk-online-cpu-0.1.13
+
+# 2) 准备模型目录（Windows 用 mkdir，Git Bash 可直接执行）
+mkdir -p ./funasr-runtime-resources/models
+
+# 3) 启动容器（宿主机 10096 -> 容器 10095）
+cd F:\ai\funasr_repo
+docker run -p 10096:10095 -it --privileged=true -v models:/workspace/models registry.cn-hangzhou.aliyuncs.com/funasr_repo/funasr:funasr-runtime-sdk-online-cpu-0.1.13
+
+# 4) 进入容器并启动 2pass 服务（另开终端执行）:
+#    docker exec -it <容器ID> /bin/sh
+#    cd FunASR/runtime
+#    touch /workspace/models/hotwords.txt        # 避免热词文件缺失报错
+#    nohup bash run_server_2pass.sh \
+#      --download-model-dir /workspace/models \
+#      --vad-dir damo/speech_fsmn_vad_zh-cn-16k-common-onnx \
+#      --model-dir damo/speech_paraformer-large-vad-punc_asr_nat-zh-cn-16k-common-vocab8404-onnx \
+#      --online-model-dir damo/speech_paraformer-large_asr_nat-zh-cn-16k-common-vocab8404-online-onnx \
+#      --punc-dir damo/punc_ct-transformer_zh-cn-common-vad_realtime-vocab272727-onnx \
+#      --lm-dir damo/speech_ngram_lm_zh-cn-ai-wesp-fst \
+#      --itn-dir thuduj12/fst_itn_zh \
+#      --spk-dir damo/speech_campplus_sv_zh-cn_16k-common-onnx \
+#      --certfile 0 \
+#      --hotword /workspace/models/hotwords.txt > log.txt 2>&1 &
+
+# 5) 客户端连接示例（宿主机端口 10096）:
+#    多人分离: python funasr_samples/samples/python/funasr_wss_client.py --host 127.0.0.1 --port 10096 --mode 2pass --chunk_size "8,8,4" --audio_in ./meeting.wav --speaker_diarization 1 --output_dir ./results
+#    离线可靠分离（推荐）: python funasr_samples/samples/python/diarize.py --audio_in ./meeting.wav --output_dir ./results

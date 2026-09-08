@@ -1,0 +1,33 @@
+version: "3.8"
+# FunASR Runtime SDK 在线 2pass 服务（含说话人分离 cam++）
+# 用法:
+#   启动: docker compose up -d
+#   停止: docker compose down
+#   查看日志: docker compose logs -f
+#   客户端连接宿主机端口 10096（容器内为 10095）
+#
+# 首次启动后需进入容器拉起 2pass 服务（模型会自动下载到 ./models）:
+#   docker exec -it funasr-2pass /bin/sh
+#   cd FunASR/runtime
+#   touch /workspace/models/hotwords.txt
+#   nohup bash run_server_2pass.sh \
+#     --download-model-dir /workspace/models \
+#     --vad-dir damo/speech_fsmn_vad_zh-cn-16k-common-onnx \
+#     --model-dir damo/speech_paraformer-large-vad-punc_asr_nat-zh-cn-16k-common-vocab8404-onnx \
+#     --online-model-dir damo/speech_paraformer-large_asr_nat-zh-cn-16k-common-vocab8404-online-onnx \
+#     --punc-dir damo/punc_ct-transformer_zh-cn-common-vad_realtime-vocab272727-onnx \
+#     --lm-dir damo/speech_ngram_lm_zh-cn-ai-wesp-fst \
+#     --itn-dir thuduj12/fst_itn_zh \
+#     --spk-dir damo/speech_campplus_sv_zh-cn_16k-common-onnx \
+#     --certfile 0 --hotword /workspace/models/hotwords.txt > log.txt 2>&1 &
+
+services:
+  funasr:
+    image: registry.cn-hangzhou.aliyuncs.com/funasr_repo/funasr:funasr-runtime-sdk-online-cpu-0.1.13
+    container_name: funasr-2pass
+    privileged: true
+    ports:
+      - "10096:10095"
+    volumes:
+      - ./models:/workspace/models
+    restart: unless-stopped
