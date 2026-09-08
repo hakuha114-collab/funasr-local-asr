@@ -1,0 +1,26 @@
+# Model weights — downloaded on first run, never commit
+models/modelscope/
+models/damo/
+models/thuduj12/
+models.zip
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Logs
+*.log
+
+# OS / editor metadata
+._*
+.DS_Store
+Thumbs.db
+
+# WorkBuddy workspace internals
+.workbuddy/
+
+# Env / secrets
+.env
+*.env
+!.env.example
